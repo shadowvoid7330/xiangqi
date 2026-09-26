@@ -3,124 +3,194 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Online Peer-to-Peer Xiangqi</title>
-  
-  <!-- Xiangqiboard CSS & jQuery Dependency -->
-  <link rel="stylesheet" href="https://unpkg.com/xiangqiboardjs@0.3.3/www/css/xiangqiboard-0.3.3.min.css">
-  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-  <!-- Xiangqiboard JS & Xiangqi Engine -->
-  <script src="https://unpkg.com/xiangqiboardjs@0.3.3/www/js/xiangqiboard-0.3.3.min.js"></script>
+  <title>Online Xiangqi</title>
+
+  <!-- Xiangqi Engine & PeerJS -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xiangqi.js/0.1.1/xiangqi.min.js"></script>
-  <!-- PeerJS for Multiplayer Connection -->
   <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
 
   <style>
-    body { font-family: sans-serif; text-align: center; background-color: #f4f4f9; padding: 20px; }
-    #board { width: 400px; margin: 20px auto; }
-    .controls { margin-bottom: 20px; }
-    input, button { padding: 8px 12px; margin: 5px; font-size: 16px; }
-    #status { font-weight: bold; margin-top: 10px; }
+    body { font-family: Arial, sans-serif; text-align: center; background: #2c3e50; color: #ecf0f1; margin: 0; padding: 20px; }
+    h1 { margin-bottom: 10px; }
+    .card { background: #34495e; max-width: 500px; margin: 10px auto; padding: 15px; border-radius: 8px; }
+    input, button { padding: 8px 12px; font-size: 14px; margin: 5px; border-radius: 4px; border: none; }
+    button { background: #2ecc71; color: white; cursor: pointer; font-weight: bold; }
+    button:hover { background: #27ae60; }
+    #status { font-weight: bold; margin: 10px 0; color: #f1c40f; }
+    #error-log { color: #e74c3c; font-size: 13px; }
+
+    /* Board UI */
+    #board-container { display: flex; justify-content: center; margin-top: 15px; }
+    #board {
+      display: grid;
+      grid-template-columns: repeat(9, 45px);
+      grid-template-rows: repeat(10, 45px);
+      gap: 1px;
+      background: #8e44ad;
+      border: 3px solid #f39c12;
+      padding: 2px;
+      background-color: #f39c12;
+    }
+    .cell {
+      width: 45px;
+      height: 45px;
+      background-color: #e67e22;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 24px;
+      font-weight: bold;
+      cursor: pointer;
+      user-select: none;
+    }
+    .cell.selected { background-color: #f1c40f; color: #000; }
+    .piece-r { color: #c0392b; text-shadow: 1px 1px 2px #000; }
+    .piece-b { color: #2c3e50; text-shadow: 1px 1px 2px #fff; }
   </style>
 </head>
 <body>
 
-  <h1>Online Xiangqi</h1>
+  <h1>Online Xiangqi (P2P)</h1>
 
-  <div class="controls">
-    <div>
-      <strong>Your Game ID:</strong> <span id="my-id">Generating...</span>
+  <div class="card">
+    <div><strong>Your Game ID:</strong> <span id="my-id">Generating...</span></div>
+    <div style="margin-top:10px;">
+      <input type="text" id="join-id" placeholder="Enter Friend's Game ID" />
+      <button onclick="connectToPeer()">Connect</button>
     </div>
-    <br>
-    <input type="text" id="join-id" placeholder="Enter Friend's Game ID" />
-    <button onclick="connectToPeer()">Connect to Friend</button>
+    <div id="status">Initializing network...</div>
+    <div id="error-log"></div>
   </div>
 
-  <div id="status">Status: Waiting to connect...</div>
-  
-  <div id="board"></div>
+  <div id="board-container">
+    <div id="board"></div>
+  </div>
 
   <script>
     const game = new Xiangqi();
-    let board = null;
+    let selectedSquare = null;
     let peer = null;
     let conn = null;
-    let myColor = 'r'; // Default to Red host
+    let myColor = 'r';
 
-    // 1. Initialize WebRTC Connection
-    peer = new Peer();
+    // Map Xiangqi FEN piece characters to Chinese characters
+    const pieceSymbols = {
+      'r': '車', 'n': '馬', 'b': '象', 'a': '士', 'k': '將', 'c': '砲', 'p': '卒',
+      'R': '車', 'N': '馬', 'B': '相', 'A': '仕', 'K': '帥', 'C': '炮', 'P': '兵'
+    };
+
+    function logError(msg) {
+      document.getElementById('error-log').innerText = "Notice: " + msg;
+    }
+
+    // Initialize PeerJS with public STUN servers for firewall traversal
+    peer = new Peer({
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' }
+        ]
+      }
+    });
 
     peer.on('open', (id) => {
       document.getElementById('my-id').innerText = id;
+      document.getElementById('status').innerText = 'Ready! Share your ID or enter your friend\'s ID.';
     });
 
-    // 2. Handle Incoming Connection (Host Side - Red)
+    peer.on('error', (err) => {
+      console.error(err);
+      logError(err.type + ": " + err.message);
+      document.getElementById('my-id').innerText = 'Error';
+    });
+
     peer.on('connection', (connection) => {
       conn = connection;
       myColor = 'r';
-      setupConnection();
+      setupNetwork();
       document.getElementById('status').innerText = 'Connected! You are RED (Player 1). Your turn.';
     });
 
-    // 3. Connect to a Peer (Guest Side - Black)
     function connectToPeer() {
-      const targetId = document.getElementById('join-id').value;
+      const targetId = document.getElementById('join-id').value.trim();
       if (!targetId) return alert("Please enter an ID.");
       
       conn = peer.connect(targetId);
       myColor = 'b';
-      board.orientation('black'); // Flip board for Black player
-      setupConnection();
-      document.getElementById('status').innerText = 'Connected! You are BLACK (Player 2). Waiting for Red to move...';
+      setupNetwork();
+      document.getElementById('status').innerText = 'Connected! You are BLACK (Player 2). Waiting for Red...';
     }
 
-    // 4. Handle Received Game Moves
-    function setupConnection() {
+    function setupNetwork() {
       conn.on('data', (data) => {
         if (data.type === 'move') {
           game.move(data.move);
-          board.position(game.fen());
+          renderBoard();
           updateStatus();
         }
       });
     }
 
-    // 5. Board Drag & Drop Logic
-    function onDragStart(source, piece) {
-      // Prevent moving if game is over
-      if (game.game_over()) return false;
+    // Board Render & Click Handlers
+    function renderBoard() {
+      const boardEl = document.getElementById('board');
+      boardEl.innerHTML = '';
+      const boardState = game.board();
 
-      // Only allow user to drag their assigned side's pieces
-      if ((game.turn() === 'r' && myColor !== 'r') || (game.turn() === 'b' && myColor !== 'b')) {
-        return false;
-      }
+      // Reverse rendering order if playing as Black
+      const rows = myColor === 'b' ? [0,1,2,3,4,5,6,7,8,9] : [9,8,7,6,5,4,3,2,1,0];
+      const cols = myColor === 'b' ? [8,7,6,5,4,3,2,1,0] : [0,1,2,3,4,5,6,7,8];
 
-      // Do not allow picking up enemy pieces
-      if ((game.turn() === 'r' && piece.search(/^b/) !== -1) ||
-          (game.turn() === 'b' && piece.search(/^r/) !== -1)) {
-        return false;
-      }
-    }
+      const files = ['a','b','c','d','e','f','g','h','i'];
 
-    function onDrop(source, target) {
-      // Validate move in Xiangqi rules engine
-      const move = game.move({
-        from: source,
-        to: target
+      rows.forEach(r => {
+        cols.forEach(c => {
+          const square = files[c] + r;
+          const piece = boardState[9 - r][c];
+          
+          const cell = document.createElement('div');
+          cell.className = 'cell';
+          cell.dataset.square = square;
+
+          if (selectedSquare === square) {
+            cell.classList.add('selected');
+          }
+
+          if (piece) {
+            const isRed = piece.color === 'r';
+            cell.innerHTML = `<span class="${isRed ? 'piece-r' : 'piece-b'}">${pieceSymbols[piece.type] || piece.type}</span>`;
+          }
+
+          cell.onclick = () => handleSquareClick(square);
+          boardEl.appendChild(cell);
+        });
       });
-
-      // If invalid move, snap piece back
-      if (move === null) return 'snapback';
-
-      // Send move to peer
-      if (conn) {
-        conn.send({ type: 'move', move: { from: source, to: target } });
-      }
-
-      updateStatus();
     }
 
-    function onSnapEnd() {
-      board.position(game.fen());
+    function handleSquareClick(square) {
+      if (game.game_over()) return;
+      if (game.turn() !== myColor) return; // Prevent moving out of turn
+
+      if (!selectedSquare) {
+        // Select square if piece belongs to current player
+        const piece = game.get(square);
+        if (piece && piece.color === myColor) {
+          selectedSquare = square;
+          renderBoard();
+        }
+      } else {
+        // Attempt move
+        const move = game.move({ from: selectedSquare, to: square });
+        selectedSquare = null;
+
+        if (move) {
+          if (conn) {
+            conn.send({ type: 'move', move: { from: move.from, to: move.to } });
+          }
+          updateStatus();
+        }
+        renderBoard();
+      }
     }
 
     function updateStatus() {
@@ -135,14 +205,8 @@
       }
     }
 
-    // Initialize Board
-    board = Xiangqiboard('board', {
-      draggable: true,
-      position: 'start',
-      onDragStart: onDragStart,
-      onDrop: onDrop,
-      onSnapEnd: onSnapEnd
-    });
+    // Initial render
+    renderBoard();
   </script>
 </body>
 </html>
