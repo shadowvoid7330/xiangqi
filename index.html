@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Online Peer-to-Peer Xiangqi</title>
+  
+  <!-- Xiangqiboard CSS & jQuery Dependency -->
+  <link rel="stylesheet" href="https://unpkg.com/xiangqiboardjs@0.3.3/www/css/xiangqiboard-0.3.3.min.css">
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <!-- Xiangqiboard JS & Xiangqi Engine -->
+  <script src="https://unpkg.com/xiangqiboardjs@0.3.3/www/js/xiangqiboard-0.3.3.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xiangqi.js/0.1.1/xiangqi.min.js"></script>
+  <!-- PeerJS for Multiplayer Connection -->
+  <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+
+  <style>
+    body { font-family: sans-serif; text-align: center; background-color: #f4f4f9; padding: 20px; }
+    #board { width: 400px; margin: 20px auto; }
+    .controls { margin-bottom: 20px; }
+    input, button { padding: 8px 12px; margin: 5px; font-size: 16px; }
+    #status { font-weight: bold; margin-top: 10px; }
+  </style>
+</head>
+<body>
+
+  <h1>Online Xiangqi</h1>
+
+  <div class="controls">
+    <div>
+      <strong>Your Game ID:</strong> <span id="my-id">Generating...</span>
+    </div>
+    <br>
+    <input type="text" id="join-id" placeholder="Enter Friend's Game ID" />
+    <button onclick="connectToPeer()">Connect to Friend</button>
+  </div>
+
+  <div id="status">Status: Waiting to connect...</div>
+  
+  <div id="board"></div>
+
+  <script>
+    const game = new Xiangqi();
+    let board = null;
+    let peer = null;
+    let conn = null;
+    let myColor = 'r'; // Default to Red host
+
+    // 1. Initialize WebRTC Connection
+    peer = new Peer();
+
+    peer.on('open', (id) => {
+      document.getElementById('my-id').innerText = id;
+    });
+
+    // 2. Handle Incoming Connection (Host Side - Red)
+    peer.on('connection', (connection) => {
+      conn = connection;
+      myColor = 'r';
+      setupConnection();
+      document.getElementById('status').innerText = 'Connected! You are RED (Player 1). Your turn.';
+    });
+
+    // 3. Connect to a Peer (Guest Side - Black)
+    function connectToPeer() {
+      const targetId = document.getElementById('join-id').value;
+      if (!targetId) return alert("Please enter an ID.");
+      
+      conn = peer.connect(targetId);
+      myColor = 'b';
+      board.orientation('black'); // Flip board for Black player
+      setupConnection();
+      document.getElementById('status').innerText = 'Connected! You are BLACK (Player 2). Waiting for Red to move...';
+    }
+
+    // 4. Handle Received Game Moves
+    function setupConnection() {
+      conn.on('data', (data) => {
+        if (data.type === 'move') {
+          game.move(data.move);
+          board.position(game.fen());
+          updateStatus();
+        }
+      });
+    }
+
+    // 5. Board Drag & Drop Logic
+    function onDragStart(source, piece) {
+      // Prevent moving if game is over
+      if (game.game_over()) return false;
+
+      // Only allow user to drag their assigned side's pieces
+      if ((game.turn() === 'r' && myColor !== 'r') || (game.turn() === 'b' && myColor !== 'b')) {
+        return false;
+      }
+
+      // Do not allow picking up enemy pieces
+      if ((game.turn() === 'r' && piece.search(/^b/) !== -1) ||
+          (game.turn() === 'b' && piece.search(/^r/) !== -1)) {
+        return false;
+      }
+    }
+
+    function onDrop(source, target) {
+      // Validate move in Xiangqi rules engine
+      const move = game.move({
+        from: source,
+        to: target
+      });
+
+      // If invalid move, snap piece back
+      if (move === null) return 'snapback';
+
+      // Send move to peer
+      if (conn) {
+        conn.send({ type: 'move', move: { from: source, to: target } });
+      }
+
+      updateStatus();
+    }
+
+    function onSnapEnd() {
+      board.position(game.fen());
+    }
+
+    function updateStatus() {
+      if (game.in_checkmate()) {
+        document.getElementById('status').innerText = 'Game Over: Checkmate!';
+      } else if (game.in_draw()) {
+        document.getElementById('status').innerText = 'Game Over: Draw!';
+      } else {
+        const turnName = game.turn() === 'r' ? 'Red' : 'Black';
+        const isMyTurn = game.turn() === myColor ? "(Your turn)" : "(Waiting for opponent)";
+        document.getElementById('status').innerText = `Turn: ${turnName} ${isMyTurn}`;
+      }
+    }
+
+    // Initialize Board
+    board = Xiangqiboard('board', {
+      draggable: true,
+      position: 'start',
+      onDragStart: onDragStart,
+      onDrop: onDrop,
+      onSnapEnd: onSnapEnd
+    });
+  </script>
+</body>
+</html>
